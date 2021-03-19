@@ -1,0 +1,281 @@
+---
+title: "Лабораторная работа №6. Модели CAPM, Fama & French и проведение event-study"
+author: "Ломакин Иван"
+date: '17.02.2021'
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+source('functions.R')
+```
+
+## 1. Данные и графики
+
+```{r, warning=FALSE, message=FALSE}
+
+# Русал
+start.date = as.Date('2012-01-01')
+end.date = Sys.Date()
+
+rual <- get_finam_data('RUAL', from = '2012-01-01', to = '2021-02-12') #Русал 
+RUAL <- quant_tools_to_xts(rual)
+RUAL.rtn <- diff(log(RUAL$close)) # расчет лог-доходности 
+RUAL.rtn = RUAL.rtn[!is.na(RUAL.rtn)] # убрать значения NA из серии
+plot(RUAL.rtn)
+plot(RUAL.rtn, main = 'Daily yields of Rusal') # график доходностей
+
+# MICEX
+micex <- get_finam_data('MICEX', from = '2012-01-01', to = '2021-02-12') # индекс ММВБ 
+MICEX <- quant_tools_to_xts(micex)
+MICEX.rtn <- diff(log(MICEX$close)) # расчет лог-доходности 
+MICEX.rtn = MICEX.rtn[!is.na(MICEX.rtn)] # убрать значения NA из серии
+plot(MICEX.rtn)
+
+
+```
+ 
+## Объединение показателей
+
+```{r}
+rtns <- merge(RUAL.rtn, MICEX.rtn)
+names(rtns) <- c('RUAL', 'MICEX')
+rtns <- rtns[complete.cases(rtns)] # убрать значения, в которых хотя бы одно из значений равно NA
+plot(x = coredata(rtns$MICEX), y = coredata(rtns$RUAL),
+     xlab ='MICEX yield', ylab = 'RUAL yield')
+
+```
+
+## 2. Безрисковые доходности
+
+```{r}
+
+ruonia <- read.csv("ruonia.csv")
+ruonia$date <- as.Date(ruonia$date)
+rf_rate <- as.xts(as.numeric(ruonia$ruo), order.by = ruonia$date) # преобразуем в тип xts 
+plot(rf_rate, main = 'Risk-free rate (RUONIA), % per annum', ylab = '%')
+
+rf_rate_d <- ((rf_rate+100)/100)^(1/365)-1 # дневные значения для безрисковой ставки 
+rf_rate_d <- rf_rate_d[index(rtns)] # получить только те даты, которые содержатся в rtns 
+
+```
+
+## 3. Линейная регрессия для CAPM
+
+```{r}
+rtns <- merge(rtns, rf_rate_d)
+rtns$ex_rosn_rtns <- rtns$RUAL - rtns$rf_rate_d
+rtns$ ex_micex_rtns <- rtns$MICEX - rtns$rf_rate_d
+rtns <- rtns[complete.cases(rtns),]
+
+fit <- lm(ex_rosn_rtns ~ ex_micex_rtns, data = rtns)
+summary(fit)
+
+fit_wo_int <- lm(ex_rosn_rtns ~ ex_micex_rtns + 0, data = rtns)
+summary(fit_wo_int)
+
+```
+
+> Константа не является статистически значимой на приемлимых уровнях значимости. Следовательно мы можем принять гипотезу о том, что значение коэффициента равно нулю.
+
+> Значение R квадрата близко к 0,19, следовательно дисперсия тикера русала объясняется индексом МосБиржи лишь на 19%. Остальная дисперсия объясняется другими факторами.
+
+> После пересчета регрессии без константы сильных изменений не замечено. Значимость коэффициента при индексе МосБиржи сохранилась, а объясняющая дисперсия отличается на десятичные и сотые доли процента.
+
+## 4. Показатели CAPM
+
+```{r}
+library(PerformanceAnalytics)
+
+CAPM.beta(Ra = RUAL.rtn,Rb = MICEX.rtn,Rf = rf_rate_d)
+CAPM.alpha(Ra = RUAL.rtn,Rb = MICEX.rtn,Rf = rf_rate_d)
+
+SharpeRatio.annualized(RUAL.rtn, Rf = rf_rate_d, geometric = FALSE)
+SharpeRatio.annualized(MICEX.rtn, Rf = rf_rate_d, geometric = FALSE)
+```
+
+> Критерий шарпа указывает на то, что тикер Русала является очень рисковым. Это подтверждается коэфициентом бета, который утверждает, что предельный вклад Русала в дисперсию доходности индекса МосБиржи составляет 96%.
+
+## "Скользящая бета" и "скользящая альфа"
+
+```{r}
+chart.RollingRegression(Ra = RUAL.rtn,Rb = MICEX.rtn,Rf = rf_rate_d,width = 252, attribute = "Beta",
+                        main = 'Moving beta of the RUSAL shares')
+chart.RollingRegression(Ra = RUAL.rtn,Rb = MICEX.rtn,Rf = rf_rate_d,width = 252, attribute = "Alpha",
+                        main = 'Moving alpha for Rusal shares')
+```
+
+> Значения альфы и беты неустойчивы во времени и показывают разнонаправленную динамику с 1 марта 2016 года: альфа резко падает до нуля, тогда как бета проявляет волатильность и цикличность в ней. Бета относительно стабилизируется начиная со 2 марта 2020 года. 
+
+# 5. Модель CAPM для американского рынка 
+
+## Данные и графики и объединение показателей
+
+```{r}
+start.date = as.Date('2005-01-01')
+ADM <- getSymbols('ADM', src = 'yahoo',from = start.date, to = '2021-02-12',
+                  auto.assign = FALSE)
+SPX <- getSymbols('^GSPC', src = 'yahoo',from = start.date,to = '2021-02-12',
+                  auto.assign = FALSE)
+ADM <- to.monthly(ADM) # месячные данные
+SPX <- to.monthly(SPX)
+ADM.rtn <- diff(log(ADM$ADM.Adjusted)) #  доходности
+SPX.rtn <- diff(log(SPX$SPX.Adjusted))
+rtns <- merge(ADM.rtn, SPX.rtn) # Объединить в единый объект
+names(rtns) <- c('ADM', 'SPX') # переименовать переменные
+
+plot(rtns$ADM, main = 'Daily yields of ADM')
+plot(rtns$SPX, main = 'Daily yields of SPX')
+plot(rtns, main = 'Daily yields of ADM and SPX')
+
+rf <- getSymbols('DGS3MO', src = 'FRED', auto.assign = FALSE) #скачать данные по доходностям 3-месячных US Tresuaries
+rf <- aggregate(rf, as.yearmon, mean, na.rm=TRUE ) # посчитать сремесячные значения для доходностей 
+rtns <- merge.xts(rtns, rf,join = 'left' )
+names(rtns) <- c('ADM','SPX','US Tresuaries')
+plot(rtns$`US Tresuaries`, main = 'Daily yields of US Tresuaries')
+plot(x = coredata(rtns$ADM), y = coredata(rtns$`US Tresuaries`),
+     xlab ='ADM yield', ylab = 'US Tresuaries yield')
+plot(x = coredata(rtns$SPX), y = coredata(rtns$`US Tresuaries`),
+     xlab ='SPX yield', ylab = 'US Tresuaries yield')
+```
+
+## Линейная регрессия для CAPM 
+
+```{r}
+
+ex_adm_rtns <- rtns$ADM - rtns$`US Tresuaries` # избыточная доходность эмитета
+ex_spx_rtns <- rtns$SPX - rtns$`US Tresuaries` # избыточная доходность индекса
+
+fit1 <- lm(ex_adm_rtns ~ ex_spx_rtns)
+summary(fit1)
+
+```
+
+> Константа не является значимой. Поэтому гипотеза о нулевом коэффициенте константы не отвергается.
+  Тем не менее индекс объясняет дисперсию тикера на 99,8%.
+
+> Построим регрессию без константы и посмотрим на изменения
+
+## Линейная регрессия без константы
+
+```{r}
+fit1_wo_int <- lm(ex_adm_rtns ~ ex_spx_rtns + 0)
+summary(fit1_wo_int)
+```
+
+> Без константы немного увеличился коэффициент индекса, при том, что его уровень значимости сохранился. Объясняющая дисперсия индекса в тикере составила ~ 99,9%.
+
+## Показатели CAPM
+
+```{r}
+
+CAPM.beta(Ra = ADM.rtn,Rb = SPX.rtn,Rf = rf)
+CAPM.alpha(Ra = ADM.rtn,Rb = SPX.rtn,Rf = rf)
+
+SharpeRatio.annualized(ADM.rtn, Rf = rf, geometric = FALSE)
+SharpeRatio.annualized(SPX.rtn, Rf = rf, geometric = FALSE)
+
+```
+
+> Критерий шарпа указывает на большее вознаграждение за риск у тикера ADM.
+
+## 6. Модель Fama-French
+
+## Получение данных
+
+```{r}
+temp <- tempfile() #создать временный файл
+download.file("http://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/F-F_Research_Data_Factors_CSV.zip",temp, mode="wb")
+unzip(temp, "F-F_Research_Data_Factors.CSV") #разархировать файл и сохранить его в рабочую папку
+ff <- read.csv(file = 'F-F_Research_Data_Factors.CSV',skip = 3, sep = ',',stringsAsFactors = FALSE) # прочитать csv-файл
+names(ff)[1] <- 'date' #изменить название первого столбца
+str(ff) # посмотреть структуру объекта ff
+```
+
+## Обработка данных
+
+```{r}
+ff$date <- as.yearmon(ff$date, '%Y%m') # месячные даты
+ff$Mkt.RF <- as.numeric(ff$Mkt.RF)/100
+ff$SMB <- as.numeric(ff$SMB)/100
+ff$HML <- as.numeric(ff$HML)/100
+ff$RF <- as.numeric(ff$RF)/100
+str(ff)
+```
+
+```{r}
+par(mfrow =c(4,1)) 
+plot(x = ff$date, y=ff$Mkt.RF, type = 'l')
+plot(x = ff$date, y=ff$SMB, type = 'l')
+plot(x = ff$date, y=ff$HML, type = 'l')
+plot(x = ff$date, y=ff$RF, type = 'l')
+par(mfrow =c(1,1))
+```
+
+> Рыночная доходность показывает сильные колебания до 1940 года, которые впоследствие снижают свою волатильность.
+  SMB и HML имеют схожую динамику, но показывают большую волатильность в 2000-2005 годах.
+  При это все три показателя неустойчивы во времени.
+
+```{r}
+ff <- ff[as.Date(ff$date) > as.Date(start.date),]
+ff <- ff[complete.cases(ff),] # оставить только те значения, для которых есть значения всех переменных
+ff <- xts(ff[,-1], order.by = ff[,1])
+
+ff_rtns <- merge.xts(ff, rtns, join = 'left' )
+ff_rtns$US.Tresuaries <- ((ff_rtns$US.Tresuaries+100)/100)^(1/12)-1
+
+ff_rtns$exrtns <- ff_rtns$Mkt.RF - ff_rtns$US.Tresuaries
+tail(ff_rtns,3)
+```
+
+```{r}
+ff_fit <- lm(exrtns ~ Mkt.RF + SMB + HML, data = ff_rtns)
+summary(ff_fit, 4)
+```
+
+> Получившаяся модель FF и CAPM модель для ADM и SPX практически не отличаются уровнем значимости рыночной доходности и объясняющей дисперсией. Однако, в FF модели константа является значимой и мы отвергаем гипотезу о том, что значение ее коэффициента 0.
+  Коэффициент бета для FF близок к единице (1,002) и схож с этим показателем для CAPM (0,999).
+  Объясняющие дисперсии отличаются незначительно: 0,9991 и 0,9987 для FF и CAPM соответственно.
+  
+
+## 7. Event-study 
+
+## Скандал с несоблюдением соглашения о влиянии Олега Дерипаски на Русал
+
+Европейские чиновники предоставили властям США информацию о том, что Олег Дерипаска продолжает контролировать «Русал», что противоречит соглашению, заключенному в рамках отмены американских санкций (https://quote.rbc.ru/news/article/5fdb68aa9a79479ebf27cc4b). Сообщение поступило от Bloomberg 17 декабря 2020 года в 16:24. Акции компании «Русал» упали на 9,15%, до ₽36,2 по состоянию на 16:44 мск, свидетельствуют данные торгов. Позднее, на 17:09, снижение замедлилось до 6,16% (₽37,39). За день компания потеряла 6% стоимости.
+
+Проведем event-study: насколько изменение цен на акции 17 декабря 2020 года отличается от нормальной волатильности цен на акции Русала.
+
+Дата события (event-date) - 17 декабря 2020 года.
+
+```{r}
+start.date <- as.Date('2019-12-17') # возьмем данные за последний год 
+end.date <- as.Date('2020-12-17')
+
+rtns_event <- merge(RUAL.rtn, MICEX.rtn, rf_rate_d)
+rtns_event <- rtns_event[paste0(start.date, '::', end.date)]
+names(rtns_event) = c('RUAL', 'MICEX', 'rf')
+event_day <- '2020-12-17'
+chartSeries(RUAL[paste0(start.date, '::', end.date)], theme='white')
+tail(rtns_event)
+```
+
+## CAPM за год
+
+```{r}
+rtns_event$exret <- rtns_event$RUAL -  rtns_event$rf
+rtns_event$exmkt <- rtns_event$MICEX -  rtns_event$rf
+
+capm_event <- lm(exret ~ exmkt, data = rtns_event[,-nrow(rtns_event)]) 
+event_window <- rtns_event[nrow(rtns_event)]
+event_window$pred.ret <- summary(capm_event)$coefficients[1]+summary(capm_event)$coefficients[2]*event_window$exmkt
+event_window$ab.ret <- event_window$exret - event_window$pred.ret
+event_window$tStat <- coredata(event_window$ab.ret)/summary(capm_event)$sigma
+event_window$pvalue <- 2*(1-pt(abs(coredata(event_window$tStat)), df = nrow(rtns_event)-2))
+event_window
+```
+
+> Падение из-за скандала с Дерипаской статистически значимо отличается от ожидаемых значение на уровне значимости 0,01.
+
+
