@@ -1,0 +1,183 @@
+---
+title: "lab-4 Lomakin"
+author: "Ivan Lomakin"
+date: "09 02 2021"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+source('functions.R')
+```
+
+## 1 Данные + графики
+
+```{r}
+Rual <- get_finam_data('RUAL', from = '2012-01-01', to = Sys.Date()) # индекс Русала
+Rual <- quant_tools_to_xts(Rual)
+Rual.rtn <- diff(log(Rual$close)) # расчет лог-доходности 
+Rual.rtn = Rual.rtn[!is.na(Rual.rtn)] # убрать значения NA из серии
+plot(Rual.rtn)
+
+# построим графики доходностей, квадратов доходностей и их абсолютных значений
+dataToPlot = cbind(Rual.rtn, Rual.rtn^2, abs(Rual.rtn))
+colnames(dataToPlot) = c("Доходность", "Доходность^2", "abs(Доходность)")
+plot.zoo(dataToPlot, main=" Дневные доходности ", col="blue")
+
+par(mfrow=c(3,1)) # параметр, чтобы нарисовать три графика друг по другом в одноме окне
+plot(Rual.rtn^2, main="Доходность^2")
+Acf(Rual.rtn^2, main="корелограмма")
+Pacf(Rual.rtn^2, main=" частичная корелограмма")
+par(mfrow=c(1,1)) # вернуть обратно 
+
+```
+## 2 Модели прогноза средней доходности
+
+
+```{r}
+y <- Rual.rtn - mean(Rual.rtn) # константа
+
+fit.111 <- Arima(Rual.rtn, c(1, 1, 1), include.constant=TRUE)
+resid <- residuals(fit.111)
+fcst.y <- forecast(y,h=100, level=95)
+fcst.111 <- forecast(fit.111,h=100, level=95)
+plot(fcst.y)
+plot(fcst.111)
+```
+## 3 Проверка серий на наличие GARCH-эффекта
+
+```{r}
+Box.test(y^2,lag=10,type='Ljung')
+archTest(y,12) 
+
+Box.test(resid^2,lag=10,type='Ljung')
+archTest(resid,12) 
+```
+# Значения p-value во всех тестах кратно ниже 0,05, соответственно принимается гипотеза об автокорреляции ряда y и остатков модели ARIMA(1,1,1). Это свидетельствует о наличии ARCH эффекта в обеих сериях.
+
+
+## 4 Построение частичных корелограмм для квадратов для определения порядка GARCH модели.
+
+```{r}
+Pacf(Rual.rtn^2, main ='Mean model')
+Pacf(resid^2, main = 'ARMA-модель')
+```
+# Для построения GARCH-модели требуется большой порядок модели.
+
+## 5 Построение GARCH-моделей разного порядка для оценки
+```{r}
+library(fGarch)
+arch11 <- garchFit(~1+garch(1,1),data=Rual.rtn,trace=F)
+arch10 <- garchFit(~1+garch(1,0),data=Rual.rtn,trace=F)
+arch12 <- garchFit(~1+garch(1,2),data=Rual.rtn,trace=F)
+arch21 <- garchFit(~1+garch(2,1),data=Rual.rtn,trace=F)
+arch22 <- garchFit(~1+garch(2,2),data=Rual.rtn,trace=F)
+
+summary(arch11)
+summary(arch10)
+summary(arch12)
+summary(arch21)
+summary(arch22)
+```
+
+## Оценка информационного критерия Акаике моделей
+
+```{r}
+arch11@fit$ics[1]
+arch10@fit$ics[1]
+arch12@fit$ics[1]
+arch21@fit$ics[1]
+arch22@fit$ics[1]
+```
+# По информационному критерию Акаике лучшей моделью является ARCH(1,2).
+
+
+## Диагностика моделей с помощью графиков
+
+```{r}
+plot(arch12, which = 13) # модель с наилучшим Акаике
+```
+# Q-Q график показывает, что мы имеем распределение, схожее с нормальным, однако присутствуют значения, которые ниже минимальных и выше максимальных по сравнению с нормальным распределением.
+
+## Оценка остатков моделей
+
+```{r}
+res_arch12 <- residuals(arch12,standardize=T)
+Acf(res_arch12,lag=20)
+Pacf(res_arch12,lag=20)
+```
+# Автокорреляция остатков модели наблюдается на 8 и 18 лагах.
+
+## 5. Оценка GARCH-моделей c распределением Стьдента для шоков
+
+```{r}
+arch12_student <- garchFit(~1+garch(1,2),data = Rual.rtn,trace=F, 
+                           cond.dist="std")
+summary(arch12_student)
+
+
+```
+
+# В модели статистически значимыми являются все коэффициенты, кроме mu.
+
+
+## Диагностика моделей графическим способом
+```{r}
+plot(arch12_student, which = 13)
+
+```
+# Все распределения близки к нормальным. По графикам квантиль-квантиль модель без распределения Стьюдента и с ним можно сказать, что распределение стало ближе к нормальному.
+
+## Оценка GARCH модели c распределением Стьдента для шоков и ARMA-моделью для среднего
+
+```{r}
+garch_1 <- garchFit(~ 1+ arma(1,1)+garch(1,2),data=Rual.rtn,trace=F, cond.dist="std")
+
+require(rugarch)
+
+
+spec = ugarchspec(
+                 variance.model=list(garchOrder=c(1,2)),
+                 mean.model=list(armaOrder=c(1,1), include.mean=T),
+                 distribution.model="std")
+
+
+garch12 <- ugarchfit(spec, Rual.rtn, solver = 'hybrid')
+
+garch12
+
+plot(garch12, which = 9)
+```
+```{r}
+resid <- residuals(garch12, standardize = TRUE)
+Acf(resid)
+Pacf(resid)
+plot(garch12, which = 10)
+```
+# Прогнозы волантильности
+
+
+```{r}
+v1 <- volatility(arch10)*sqrt(252)*100
+v2 <- volatility(arch12_student)*sqrt(252)*100
+v3 <- garch12@fit$sigma*sqrt(252)*100 # используются разные синтаксисы из-за того, что использовались разные функции для оценки GARCH
+
+plot(x=index(Rual.rtn), v1, type = 'l')
+lines(x=index(Rual.rtn), v2, col='red')
+lines(x=index(Rual.rtn), y=v3, col='blue')
+```
+# Прогнозы котировок и волантильности
+
+```{r}
+fcst = ugarchforecast(garch12, n.ahead=10)
+plot(fcst, which = 1) # прогноз для ряда
+plot(fcst, which = 3) # прогноз для волатильность
+```
+# Arma + Garch моделирование прогноирует стабильность доходности
+# Arma + Garch моделирование прогнозирует небольшое падение волантильности, за которым последует активный рост
+
+
+
+

@@ -1,0 +1,270 @@
+---
+title: "lab-5 Lomakin"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+```{r, echo=FALSE, message=FALSE, echo=FALSE}
+source('functions.R')
+```
+
+## Данные и графики
+
+```{r} 
+# Тикер Русала
+rual <- get_finam_data('RUAL', from = '2015-03-30', to = Sys.Date()) #котировки Русала
+RUAL <- quant_tools_to_xts(rual) # конвертация в data frame
+lineChart(RUAL, theme = 'white') # график цен на акции
+RUAL.rtn <- diff(log(RUAL$close)) # расчет лог-доходности 
+RUAL.rtn = RUAL.rtn[!is.na(RUAL.rtn)] # без NA значений
+plot(RUAL.rtn, main = 'Дневные доходности Русала') # график доходностей
+
+# Газпром
+GAZP <- get_finam_data('GAZP', from = '2015-03-30', to = Sys.Date()) # индекс ММВБ 
+GAZP <- quant_tools_to_xts(GAZP)
+lineChart(GAZP, theme = 'white') # график цен на акции
+GAZP.rtn <- diff(log(GAZP$close)) # расчет лог-доходности 
+GAZP.rtn = GAZP.rtn[!is.na(GAZP.rtn)] # убрать значения NA из серии
+plot(GAZP.rtn, main = 'Дневные доходности Газпром') # график доходностей
+
+```
+
+## Индекс ОФЗ 
+
+```{r}
+bonds = QuantTools::get_finam_data('RGBITR', from = '2015-03-30', to = Sys.Date()) # Индекс государственных облигаций (ОФЗ) Московской Биржи
+bonds <- quant_tools_to_xts(bonds)
+lineChart(bonds, theme = 'white', main = 'Индекс государственных облигаций Московской Биржи')
+bonds.rtn <- diff(log(bonds$close)) # расчет лог-доходности 
+bonds.rtn = bonds.rtn[!is.na(bonds.rtn)] # убрать значения NA из серии
+```
+
+## Графики доходностей и диаграммы рассеивания
+
+```{r}
+plot(RUAL.rtn, main = 'Дневные доходности индекса РУСАЛА ') # график доходностей
+plot(GAZP.rtn, main = 'Дневные доходности индекса Газпрома') # график доходностей
+plot(bonds.rtn, main = 'Дневные доходности индекса облигаций') # график доходностей
+
+          
+
+
+rtns <- merge(RUAL.rtn, GAZP.rtn, all = TRUE) # доходности Русала и Газпрома
+names(rtns) <- c('RUAL', 'GAZP')
+plot(x = zoo::coredata(rtns$RUAL), y = zoo::coredata(rtns$GAZP),
+     xlab = 'Доходность индекса Русала', ylab = 'Доходность индекса Газпрома') # диаграмма рассения Русала и Газпрома
+
+
+rtns_R_and_B <- merge(RUAL.rtn, bonds.rtn, all = TRUE) # доходности Русала и индекса облигаций
+names(rtns_R_and_B) <- c('RUAL', 'bonds')
+plot(x = zoo::coredata(rtns_R_and_B$RUAL), y = zoo::coredata(rtns_R_and_B$bonds),
+     xlab = 'Доходность индекса Русала', ylab = 'Доходность индекса ОФЗ') # диаграмма рассения Русалаа и индекса облигаций  
+
+
+rtns_G_and_B <- merge(GAZP.rtn, bonds.rtn, all = TRUE) # доходности Газпрома и индекса облигаций
+names(rtns_G_and_B) <- c('GAZP', 'bonds')
+plot(x = zoo::coredata(rtns_G_and_B$GAZP), y = zoo::coredata(rtns_G_and_B$bonds),
+     xlab = 'Доходность индекса Газпрома', ylab = 'Доходность индекса ОФЗ') # диаграмма рассения Газпрома и индекса облигаций  
+
+```
+
+> По диаграммам рассеивания можно сделать вывод, что разброс доходностей комбинаций с индексом ОФЗ ниже, чем разброс доходностей акций Русала и Газпрома.
+
+> Из менее рисковых комбинаций предпочтительнее пара с Газпромом, так как разброс доходностей этого тикера меньше, чем у Русала.
+
+## Парные корреляции/риск
+
+```{r}
+cor(rtns, use = "complete.obs")
+
+cor(rtns_R_and_B, use = "complete.obs")
+
+cor(rtns_G_and_B, use = "complete.obs")
+```
+
+> Наименьшая корреляция наблюдается между тикером Русала и индексом ОФЗ.
+Наибольшая корреляция в паре Газпром - Индекс ОФЗ.
+
+> Из этого следует, что наименее рисковым портфелем является комбинация Русала и индекса гос облигаций
+
+## Месячные/годовые доходности портфеля
+
+```{r}
+rtns <- merge(RUAL.rtn, GAZP.rtn, bonds.rtn, all = TRUE) # Объединение доходностей
+names(rtns) <- c('Rual', 'Gazp', 'bonds')
+rtns <- rtns[complete.cases(rtns)]
+
+# график накопленной доходности - функция из пакета PerformanceAnalytics 
+chart.CumReturns(rtns, wealth.index = TRUE, legend.loc = 'bottomleft', geometric = FALSE,
+               main = 'Динамика доходностей акций российских компаний и индекса облигаций (2015-2021)',
+               ylab = '4 января 2012  = 1')
+
+charts.PerformanceSummary(rtns, ylog = TRUE, main = 'График доходностей тикеров и индекса (2015-2021)')
+
+```
+
+> Наибольшую доходность за период имеет индекс облигаций, за ним идут акции Газпрома и минимальную доходность приносит Русал.
+
+```{r}
+rtns_m = merge(RUAL$close, GAZP$close, bonds$close)[endpoints(merge(RUAL$close, GAZP$close, bonds$close)),] # месячные значения портфеля
+rtns_m = CalculateReturns(rtns_m, method = 'log') # месячные доходности портфеля
+names(rtns_m) <- c('RUAL', 'GAZP', 'bonds')
+
+t(table.CalendarReturns(rtns_m[,1])) # таблица доходностей Русала по месяцам/годам
+t(table.CalendarReturns(rtns_m[,2])) # таблица доходностей Газпрома по месяцам/годам
+t(table.CalendarReturns(rtns_m[,3])) # таблица доходностей индекса ОФЗ по месяцам/годам
+```
+
+> Наибольшую доходность Русал показывал в 2017 году, тогда как пик доходностей Газпрома и индекса ОФЗ приходится на 2019 год
+
+## Основные статистики месячных доходностей
+
+```{r}
+table.Stats(rtns_m, digits = 4)
+```
+
+> Доходность Русала по медианному значению, среднему арифметическому и среднему геометрическому уступает таким же показателям доходностей Газпрома и индекса ОФЗ.
+Более того, именно Русал имеет наибольшую волатильность среди рассматриваемых тикеров.
+
+## "Скользящие" доходности
+
+```{r}
+chart.RollingPerformance(rtns[,1:2], 
+                          width = 252, 
+                          FUN = "Return.annualized",
+                          main = "Скользящая 12-месячная доходность",
+                          legend.loc = "topleft")
+```
+
+## Историческая доходность и волатильность
+
+```{r}
+Return.annualized(rtns, geometric = FALSE)
+StdDev.annualized(rtns, geometric = FALSE)
+```
+
+## График риск-доходность портфеля
+
+```{r}
+r <- Return.annualized(rtns, geometric = FALSE)
+sd <- StdDev.annualized(rtns, geometric = FALSE)
+tab <- cbind(round(as.numeric(r),2),round(as.numeric(sd),2), names(rtns))
+tab <- as.data.frame(tab)
+tab[,1] <- as.numeric(as.character((tab[,1])))
+tab[,2] <- as.numeric(as.character((tab[,2])))
+names(tab) <- c('return' ,'volatility', 'ticker')
+
+p <- ggplot(tab, aes(x = volatility, y = return, label = ticker))
+p + geom_point()+geom_text(check_overlap = TRUE, vjust  = -1)+
+   theme_bw()+
+   ggtitle('Cоотношение риск/доходность для Русала, Газпрома и индекса ОФЗ ')
+
+```
+
+> Соотношения риск/доходность Русала наихудшее из рассматриваемых.
+
+```{r}
+cor(rtns)
+```
+
+> Минимальная корреляция наблюдается между индексом облигаций и Русалом, а наибольшая между Газпромом и индексом облигаций.
+
+## Построение портфеля тикеров акций
+
+```{r}
+w = c(0.4,0.6) # 40% / 60% веса Русала и Газпрома в портфеле
+
+# Вес Газпрома выше веса Русала за счет разницы соотношений риск/доходность
+
+portfolio.prices <- as.xts(merge(RUAL$close,GAZP$close))
+portfolio.returns <- na.omit(CalculateReturns(portfolio.prices))
+colnames(portfolio.returns) <- c("RUAL","GAZP")
+```
+
+## Разбиение на два портфеля: с ребалансировкой и без
+
+```{r}
+# портфель с ребалансировкой 
+portfolio.rebal <- Return.portfolio(portfolio.returns,
+                                         rebalance_on="months",
+                                         weights=w,
+                                         wealth.index=TRUE,verbose=TRUE)
+ 
+# buy and hold /без ребалансировки 
+portfolio.bh <-Return.portfolio(portfolio.returns,
+                                         weights=w,
+                                         wealth.index=TRUE,
+                                         verbose=TRUE)
+ 
+# Объединение портфелей в один объект
+portfolios.2 <-cbind(portfolio.rebal$returns,portfolio.bh$returns)
+colnames(portfolios.2) <-c("Ребалансировка","buy and hold")
+```
+
+## График накопленной доходностей портфелей
+
+```{r}
+chart.CumReturns(portfolios.2,
+                 wealth.index=TRUE,
+                 legend.loc="bottomright",
+                 main="Накопленная доходность портфелей buy&hold и с ребалансировкой ",
+                 ylab="")
+```
+## Cтатистики портфелей
+
+```{r}
+table.AnnualizedReturns(portfolios.2)
+```
+
+> Доходность портфеля с ребалансировкой выше, чем у buy & hold портфеля при примерно одинаковой волатильности. Из этого следует, что показатель Шарпа у ребалансируемого портфеля выше, следовательно такой портфель предпочтительнее.
+
+## Создание портфеля из акций и индекса облигаций и его сравнение и рисковым и безрисковым портфелями
+
+```{r}
+portfolio.bondes <- Return.portfolio(as.xts(bonds$close))
+portfolio.shares_and_bonds.prices <- merge(portfolio.prices, as.xts(bonds$close))
+
+portfolio.returns_b <- na.omit(CalculateReturns(portfolio.bondes))
+portfolio.returns_s_b <- na.omit(CalculateReturns(portfolio.shares_and_bonds.prices))
+colnames(portfolio.returns_b) <- c("bonds")
+colnames(portfolio.returns_s_b) <- c("Gazp", "Rual", "bonds")
+
+w_2 = c(0.24,0.36,0.4) # Веса портфеля 60%(акции с ребалансировкой)/40%(индекс ОФЗ)
+w_b = c(1)
+
+portfolio_b <- Return.portfolio(portfolio.returns_s_b,
+                                         weights=w_2,
+                                         wealth.index=TRUE,verbose=TRUE)
+
+portfolio_2_reb <- Return.portfolio(portfolio.returns_s_b,
+                                         rebalance_on="months",
+                                         weights=w_2,
+                                         wealth.index=TRUE,verbose=TRUE)
+
+portfolio.3 <- cbind(portfolio_b$returns, 
+                     portfolio_2_reb$returns,
+                     portfolio.rebal$returns)
+colnames(portfolio.3) <-c("Облигации","Ребалансировка акции + облигации","Акции")
+
+chart.CumReturns(portfolio.3,
+                 wealth.index=TRUE,
+                 legend.loc="topleft",
+                 main="Накопленная доходность портфелей",
+                 ylab="")
+
+```
+
+```{r}
+table.AnnualizedReturns(portfolio.3)
+```
+
+> Наилучшим портфелем с точки зрения показателя Шарпа является портфель полностью состоящий из индекса облигаций, тем не менее мне более предпочтительным кажется ребалансируемый портфель, состоящий из акций и индекса облигаций.
+
+
+
+
+
+
+
